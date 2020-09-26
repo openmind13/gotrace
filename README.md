@@ -1,7 +1,9 @@
 # gotrace
 
+Simple implementation of "traceroute" util
+
 ### Usage
 
 ```
-gotrace google.com
+sudo ./gotrace google.com
 ```

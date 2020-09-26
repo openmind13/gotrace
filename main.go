@@ -8,13 +8,16 @@ import (
 )
 
 func main() {
+
 	if err := run(); err != nil {
 		log.Fatal(err)
 	}
+
 }
 
 func run() error {
 	targetAddr := os.Args[1]
+
 	tracer, err := trace.NewTracer(targetAddr)
 	if err != nil {
 		return err

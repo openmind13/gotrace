@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -10,6 +11,16 @@ import (
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+)
+
+// Protocol constants
+const (
+	protocolICMP     = 1
+	protocolIPv6ICMP = 58
+)
+
+var (
+	errLocalAddrNotFound = errors.New("Local addr not found")
 )
 
 // Tracer struct
@@ -28,7 +39,11 @@ type Tracer struct {
 	message    *icmp.Message
 	binMessage *[]byte
 
+	// channel for stopping goroutines
 	cancelChannel chan os.Signal
+
+	// all ip addresses
+	path []net.IP
 }
 
 // Host struct contain information about each host
@@ -83,7 +98,7 @@ func (tracer *Tracer) setMessage() error {
 
 // Start - start trace
 func (tracer *Tracer) Start() error {
-	fmt.Printf("traceroute to %s (%v)\n",
+	fmt.Printf("traceroute to %s (%v)\n\n",
 		tracer.targetAddr,
 		tracer.targetIPAddr)
 
@@ -93,6 +108,12 @@ func (tracer *Tracer) Start() error {
 	go func() {
 		switch <-tracer.cancelChannel {
 		case os.Interrupt:
+			// print some statistics
+			fmt.Printf("\nPath length = %d: (%v)", len(tracer.path), tracer.localIPAddr)
+			for i := range tracer.path {
+				fmt.Printf(" -> (%v)", tracer.path[i])
+			}
+
 			fmt.Printf("\nexit\n")
 			os.Exit(0)
 		}
@@ -113,62 +134,59 @@ func (tracer *Tracer) Start() error {
 	// }
 
 	go tracer.receivePackets()
-	ttl := 2
-	for {
-		tracer.sendPacketWithTTL(ttl)
-
-		time.Sleep(tracer.interval)
-
-		ttl++
-	}
-}
-
-func (tracer *Tracer) sendPacketWithTTL(ttl int) error {
-	tracer.conn.IPv4PacketConn().SetTTL(ttl)
-	tracer.conn.IPv4PacketConn().SetControlMessage(ipv4.FlagTTL, true)
-
-	if _, err := tracer.conn.WriteTo(*tracer.binMessage, tracer.targetIPAddr); err != nil {
+	if err := tracer.sendPackets(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (tracer *Tracer) sendPacketsWithTTL(ttl int) error {
-	tracer.conn.IPv4PacketConn().SetTTL(ttl)
-	tracer.conn.IPv4PacketConn().SetControlMessage(ipv4.FlagTTL, true)
+func (tracer *Tracer) sendPackets() error {
+	ttl := 1
 
 	for {
 		select {
 		case <-tracer.cancelChannel:
 			return nil
+
 		default:
+			tracer.conn.IPv4PacketConn().SetTTL(ttl)
+			tracer.conn.IPv4PacketConn().SetControlMessage(ipv4.FlagTTL, true)
+
 			if _, err := tracer.conn.WriteTo(*tracer.binMessage, tracer.targetIPAddr); err != nil {
 				return err
 			}
 
 			time.Sleep(tracer.interval)
 		}
-	}
 
+		ttl++
+	}
 }
 
 func (tracer *Tracer) receivePackets() error {
 	buffer := make([]byte, 512)
+	packetCount := 0
 
 	for {
 		select {
 		case <-tracer.cancelChannel:
 			return nil
+
 		default:
-			// n, peer, err := tracer.conn.ReadFrom(buffer)
-			// if err != nil {
-			// 	return err
-			// }
 			_, controlMessage, peer, err := tracer.conn.IPv4PacketConn().ReadFrom(buffer)
 			if err != nil {
 				return err
 			}
+
+			packetCount++
+			tracer.path = append(tracer.path, controlMessage.Src)
+
+			if controlMessage.Src.String() == tracer.targetIPAddr.IP.String() {
+				tracer.cancelChannel <- os.Interrupt
+			}
+
+			fmt.Printf("%d. Packet from (%v)\n\n", packetCount, peer)
 
 			// replyMessage, err := icmp.ParseMessage(protocolICMP, buffer[:n])
 			// if err != nil {
@@ -180,12 +198,13 @@ func (tracer *Tracer) receivePackets() error {
 			// 	fmt.Println(replyMessage)
 			// }
 
-			fmt.Printf("packet from (%v) with ttl = %v\n\n", peer, controlMessage.TTL)
 		}
 	}
 }
 
 func (tracer *Tracer) setTargetAddr(targetAddr string) error {
+	tracer.targetAddr = targetAddr
+
 	addr, err := net.ResolveIPAddr("ip", targetAddr)
 	if err != nil {
 		return err
