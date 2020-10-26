@@ -7,3 +7,5 @@ Simple implementation of "traceroute" util
 ```
 sudo ./gotrace google.com
 ```
+
+![alt text](tracescreen.png)
